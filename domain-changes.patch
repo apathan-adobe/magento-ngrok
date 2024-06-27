@@ -1,0 +1,694 @@
+From 6dbeb9aa08ddd73f1c8a6e178e73e0bcc9996df0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Fri, 19 May 2023 10:20:05 +0200
+Subject: [PATCH 01/12] Adds posibility to change domain after changes in
+ ngrok.io about domain distribution.
+
+---
+ Api/Data/DomainInterface.php   | 16 +++++++++++
+ Helper/Ngrok.php               | 22 ++++++++++++---
+ Model/Config.php               | 49 ++++++++++++++++++++++++++++++++++
+ Model/Config/Source/Domain.php | 23 ++++++++++++++++
+ etc/adminhtml/system.xml       | 48 +++++++++++++++++++++++++++++++++
+ etc/config.xml                 | 12 +++++++++
+ 6 files changed, 166 insertions(+), 4 deletions(-)
+ create mode 100644 Api/Data/DomainInterface.php
+ create mode 100644 Model/Config.php
+ create mode 100644 Model/Config/Source/Domain.php
+ create mode 100644 etc/adminhtml/system.xml
+ create mode 100644 etc/config.xml
+
+diff --git a/Api/Data/DomainInterface.php b/Api/Data/DomainInterface.php
+new file mode 100644
+index 0000000..13a4cd7
+--- /dev/null
++++ b/Api/Data/DomainInterface.php
+@@ -0,0 +1,16 @@
++<?php declare(strict_types=1);
++
++namespace Shkoliar\Ngrok\Api\Data;
++
++interface Domain
++{
++    public const NGROK_IO = '.ngrok.io';
++
++    public const NGROK_APP = '.ngrok.app';
++
++    public const NGROK_DEV = '.ngrok.dev';
++
++    public const NGROK_FREE_APP = '.ngrok-free.app';
++
++    public const NGROK_FREE_DEV = '.ngrok-free.dev';
++}
+\ No newline at end of file
+diff --git a/Helper/Ngrok.php b/Helper/Ngrok.php
+index 8f66418..00b0322 100644
+--- a/Helper/Ngrok.php
++++ b/Helper/Ngrok.php
+@@ -8,15 +8,23 @@
+ 
+ namespace Shkoliar\Ngrok\Helper;
+ 
+-class Ngrok extends \Magento\Framework\App\Helper\AbstractHelper
++use Magento\Framework\App\Helper\AbstractHelper;
++use Shkoliar\Ngrok\Model\Config;
++
++class Ngrok extends AbstractHelper
+ {
+     const SCHEME_HTTP  = 'http';
+     const SCHEME_HTTPS = 'https';
+ 
+-    const NGROK_DOMAIN = '.ngrok.io';
+-
+     const HTTP_X_FORWARDED_PROTO = 'HTTP_X_FORWARDED_PROTO';
+ 
++    /**
++     * @param Config $config
++     */
++    public function __construct(
++        private Config $config
++    ) {}
++
+     /**
+      * Get server parameter value by key
+      *
+@@ -38,7 +46,13 @@ public function getDomain()
+     {
+         $ngrokDomain = $this->getServer('HTTP_X_ORIGINAL_HOST') ?: $this->getServer('HTTP_HOST');
+ 
+-        return stripos($ngrokDomain, self::NGROK_DOMAIN) !== false ? $ngrokDomain : false;
++        if ($this->config->isCustomDomain()) {
++            $configuredNgrokDomain = $this->config->getCustomDomain();
++        } else {
++            $configuredNgrokDomain = $this->config->getDomain();
++        }
++
++        return stripos($ngrokDomain, $configuredNgrokDomain) !== false ? $ngrokDomain : false;
+     }
+ 
+     /**
+diff --git a/Model/Config.php b/Model/Config.php
+new file mode 100644
+index 0000000..fb1b3db
+--- /dev/null
++++ b/Model/Config.php
+@@ -0,0 +1,49 @@
++<?php declare(strict_types=1);
++
++namespace Shkoliar\Ngrok\Model;
++
++use Magento\Framework\App\Config\ScopeConfigInterface;
++
++class Config
++{
++    private const XML_IS_CUSTOM_DOMAIN = 'ngrok/general/custom';
++    private const XML_DOMAIN = 'ngrok/general/domain';
++    private const XML_CUSTOM_DOMAIN = 'ngrok/general/custom_domain';
++
++    /**
++     * @param ScopeConfigInterface $scopeConfig
++     */
++    public function __construct(
++        private ScopeConfigInterface $scopeConfig
++    ) {}
++
++    /**
++     * @return bool
++     */
++    public function isCustomDomain(): bool
++    {
++        return $this->scopeConfig->isSetFlag(
++            self::XML_IS_CUSTOM_DOMAIN
++        );
++    }
++
++    /**
++     * @return string
++     */
++    public function getDomain(): string
++    {
++        return (string)$this->scopeConfig->getValue(
++            self::XML_DOMAIN
++        );
++    }
++
++    /**
++     * @return string
++     */
++    public function getCustomDomain(): string
++    {
++        return (string)$this->scopeConfig->getValue(
++            self::XML_CUSTOM_DOMAIN
++        );
++    }
++}
+\ No newline at end of file
+diff --git a/Model/Config/Source/Domain.php b/Model/Config/Source/Domain.php
+new file mode 100644
+index 0000000..d30b445
+--- /dev/null
++++ b/Model/Config/Source/Domain.php
+@@ -0,0 +1,23 @@
++<?php declare(strict_types=1);
++
++namespace Shkoliar\Ngrok\Model\Config\Source;
++
++use Magento\Framework\Data\OptionSourceInterface;
++use Shkoliar\Ngrok\Api\Data\DomainInterface;
++
++class Domain implements OptionSourceInterface
++{
++    /**
++     * @return array
++     */
++    public function toOptionArray(): array
++    {
++        return [
++            DomainInterface::NGROK_IO,
++            DomainInterface::NGROK_APP,
++            DomainInterface::NGROK_DEV,
++            DomainInterface::NGROK_FREE_APP,
++            DomainInterface::NGROK_FREE_DEV
++        ];
++    }
++}
+\ No newline at end of file
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+new file mode 100644
+index 0000000..82fa0df
+--- /dev/null
++++ b/etc/adminhtml/system.xml
+@@ -0,0 +1,48 @@
++<?xml version="1.0"?>
++<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
++    <system>
++        <tab id="ngrok" translate="label, comment" sortOrder="1000">
++            <label>Ngrok</label>
++        </tab>
++        <section id="ngrok"
++                 translate="label"
++                 sortOrder="20"
++                 showInDefault="1"
++                 showInWebsite="1">
++            <class>separator-top</class>
++            <label>Ngrok</label>
++            <tab>ngrok</tab>
++            <group id="general"
++                   translate="label"
++                   type="text"
++                   sortOrder="20"
++                   showInDefault="1">
++                <label>General</label>
++                <field id="custom"
++                       translate="label"
++                       type="select"
++                       sortOrder="10"
++                       showInDefault="1">
++                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
++                </field>
++                <field id="domain"
++                       translate="label"
++                       type="select"
++                       sortOrder="20"
++                       showInDefault="1">
++                    <label>Domain</label>
++                    <validate>required-entry</validate>
++                    <source_model>Admenta\Ngrok\Model\Config\Source\Domain</source_model>
++                </field>
++                <field id="custom_domain"
++                       translate="label"
++                       type="text"
++                       sortOrder="30"
++                       showInDefault="1">
++                    <label>Custom Domain</label>
++                </field>
++            </group>
++        </section>
++    </system>
++</config>
+diff --git a/etc/config.xml b/etc/config.xml
+new file mode 100644
+index 0000000..fe0fe1c
+--- /dev/null
++++ b/etc/config.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0"?>
++<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
++    <default>
++        <ngrok>
++            <general>
++                <custom>0</custom>
++                <domain>.ngrok-free.app</domain>
++            </general>
++        </ngrok>
++    </default>
++</config>
+
+From 22c19db2706c09b9b5b1ca214ca82f92ad839de8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Fri, 19 May 2023 10:46:37 +0200
+Subject: [PATCH 02/12] Fix the interface name
+
+---
+ Api/Data/DomainInterface.php | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Api/Data/DomainInterface.php b/Api/Data/DomainInterface.php
+index 13a4cd7..7b48f44 100644
+--- a/Api/Data/DomainInterface.php
++++ b/Api/Data/DomainInterface.php
+@@ -2,7 +2,7 @@
+ 
+ namespace Shkoliar\Ngrok\Api\Data;
+ 
+-interface Domain
++interface DomainInterface
+ {
+     public const NGROK_IO = '.ngrok.io';
+ 
+
+From 7c9692f301798d3d19f9cae0f03e1dd76cb3e157 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Fri, 19 May 2023 11:15:50 +0200
+Subject: [PATCH 03/12] Adds missed context from abstract helper
+
+---
+ Helper/Ngrok.php | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/Helper/Ngrok.php b/Helper/Ngrok.php
+index 00b0322..5105b46 100644
+--- a/Helper/Ngrok.php
++++ b/Helper/Ngrok.php
+@@ -9,6 +9,7 @@
+ namespace Shkoliar\Ngrok\Helper;
+ 
+ use Magento\Framework\App\Helper\AbstractHelper;
++use Magento\Framework\App\Helper\Context;
+ use Shkoliar\Ngrok\Model\Config;
+ 
+ class Ngrok extends AbstractHelper
+@@ -19,11 +20,15 @@ class Ngrok extends AbstractHelper
+     const HTTP_X_FORWARDED_PROTO = 'HTTP_X_FORWARDED_PROTO';
+ 
+     /**
++     * @param Context $context
+      * @param Config $config
+      */
+     public function __construct(
++        protected Context $context,
+         private Config $config
+-    ) {}
++    ) {
++        parent::__construct($context);
++    }
+ 
+     /**
+      * Get server parameter value by key
+
+From c32b157a28e6e7527409f9afc42c2086f129eb7a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Fri, 19 May 2023 11:38:29 +0200
+Subject: [PATCH 04/12] Changes name of tab to not duplicate id of section
+
+---
+ etc/adminhtml/system.xml | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+index 82fa0df..7d04db5 100644
+--- a/etc/adminhtml/system.xml
++++ b/etc/adminhtml/system.xml
+@@ -2,21 +2,20 @@
+ <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+     <system>
+-        <tab id="ngrok" translate="label, comment" sortOrder="1000">
++        <tab id="ngrok_tab" translate="label, comment" sortOrder="1000">
+             <label>Ngrok</label>
+         </tab>
+         <section id="ngrok"
+                  translate="label"
+-                 sortOrder="20"
+-                 showInDefault="1"
+-                 showInWebsite="1">
++                 sortOrder="10"
++                 showInDefault="1">
+             <class>separator-top</class>
+             <label>Ngrok</label>
+-            <tab>ngrok</tab>
++            <tab>ngrok_tab</tab>
+             <group id="general"
+                    translate="label"
+                    type="text"
+-                   sortOrder="20"
++                   sortOrder="10"
+                    showInDefault="1">
+                 <label>General</label>
+                 <field id="custom"
+@@ -24,6 +23,7 @@
+                        type="select"
+                        sortOrder="10"
+                        showInDefault="1">
++                    <validate>required-entry</validate>
+                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                 </field>
+                 <field id="domain"
+
+From 1d9f000a020728ed5b1797df443343592fc3bc5c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Fri, 19 May 2023 11:39:03 +0200
+Subject: [PATCH 05/12] Removes setup_version as it's not needed and it's
+ deprecated. Adds sequence of required modules.
+
+---
+ etc/module.xml | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/etc/module.xml b/etc/module.xml
+index 94185a5..99ca182 100644
+--- a/etc/module.xml
++++ b/etc/module.xml
+@@ -9,5 +9,10 @@
+ -->
+ <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd">
+-    <module name="Shkoliar_Ngrok" setup_version="1.0.0" />
++    <module name="Shkoliar_Ngrok">
++        <sequence>
++            <module name="Magento_Config"/>
++            <module name="Magento_Store"/>
++        </sequence>
++    </module>
+ </config>
+\ No newline at end of file
+
+From ee23e12384f958df3c73a14c4d5d6f2f1c3bf40a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Fri, 19 May 2023 11:44:10 +0200
+Subject: [PATCH 06/12] Removes translation for the comment
+
+---
+ etc/adminhtml/system.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+index 7d04db5..6a6337f 100644
+--- a/etc/adminhtml/system.xml
++++ b/etc/adminhtml/system.xml
+@@ -2,7 +2,7 @@
+ <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+     <system>
+-        <tab id="ngrok_tab" translate="label, comment" sortOrder="1000">
++        <tab id="ngrok_tab" translate="label" sortOrder="1000">
+             <label>Ngrok</label>
+         </tab>
+         <section id="ngrok"
+
+From c824a9cf9304b6ea62ab0af9ee1d25477f4d6df0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Wed, 24 May 2023 13:09:24 +0200
+Subject: [PATCH 07/12] Adds ACL for proper visibility in adminhtml.
+
+---
+ etc/acl.xml              | 11 +++++++++++
+ etc/adminhtml/system.xml |  1 +
+ 2 files changed, 12 insertions(+)
+ create mode 100644 etc/acl.xml
+
+diff --git a/etc/acl.xml b/etc/acl.xml
+new file mode 100644
+index 0000000..5d870a8
+--- /dev/null
++++ b/etc/acl.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0"?>
++<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++        xsi:noNamespaceSchemaLocation="urn:magento:framework:Acl/etc/acl.xsd">
++    <acl>
++        <resources>
++            <resource id="Magento_Backend::admin" title="Magento Admin">
++                <resource id="Shkoliar_Ngrok::config" title="Shkoliar Ngrok"/>
++            </resource>
++        </resources>
++    </acl>
++</config>
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+index 6a6337f..d867533 100644
+--- a/etc/adminhtml/system.xml
++++ b/etc/adminhtml/system.xml
+@@ -12,6 +12,7 @@
+             <class>separator-top</class>
+             <label>Ngrok</label>
+             <tab>ngrok_tab</tab>
++            <resource>Shkoliar_Ngrok::config</resource>
+             <group id="general"
+                    translate="label"
+                    type="text"
+
+From bcd6f20972405f2a63c780798b3ad4fa36150ed4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Wed, 24 May 2023 13:55:06 +0200
+Subject: [PATCH 08/12] Fixes missed vendor name
+
+---
+ etc/adminhtml/system.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+index d867533..1f9f31e 100644
+--- a/etc/adminhtml/system.xml
++++ b/etc/adminhtml/system.xml
+@@ -34,7 +34,7 @@
+                        showInDefault="1">
+                     <label>Domain</label>
+                     <validate>required-entry</validate>
+-                    <source_model>Admenta\Ngrok\Model\Config\Source\Domain</source_model>
++                    <source_model>Shkoliar\Ngrok\Model\Config\Source\Domain</source_model>
+                 </field>
+                 <field id="custom_domain"
+                        translate="label"
+
+From 8d4b6b94de551ee464556f427d74ae03bdb800a0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Mon, 29 May 2023 16:49:49 +0200
+Subject: [PATCH 09/12] Changes confusing name. Fixes configuration value
+ returns string instead of int key value.
+
+---
+ Helper/Ngrok.php               |  2 +-
+ Model/Config.php               |  4 ++--
+ Model/Config/Source/Domain.php | 10 +++++-----
+ etc/adminhtml/system.xml       | 11 ++++++-----
+ etc/config.xml                 |  2 +-
+ 5 files changed, 15 insertions(+), 14 deletions(-)
+
+diff --git a/Helper/Ngrok.php b/Helper/Ngrok.php
+index 5105b46..6dce564 100644
+--- a/Helper/Ngrok.php
++++ b/Helper/Ngrok.php
+@@ -51,7 +51,7 @@ public function getDomain()
+     {
+         $ngrokDomain = $this->getServer('HTTP_X_ORIGINAL_HOST') ?: $this->getServer('HTTP_HOST');
+ 
+-        if ($this->config->isCustomDomain()) {
++        if ($this->config->isCustomDomainEnabled()) {
+             $configuredNgrokDomain = $this->config->getCustomDomain();
+         } else {
+             $configuredNgrokDomain = $this->config->getDomain();
+diff --git a/Model/Config.php b/Model/Config.php
+index fb1b3db..8db8e6c 100644
+--- a/Model/Config.php
++++ b/Model/Config.php
+@@ -6,7 +6,7 @@
+ 
+ class Config
+ {
+-    private const XML_IS_CUSTOM_DOMAIN = 'ngrok/general/custom';
++    private const XML_IS_CUSTOM_DOMAIN = 'ngrok/general/enable_custom_domain';
+     private const XML_DOMAIN = 'ngrok/general/domain';
+     private const XML_CUSTOM_DOMAIN = 'ngrok/general/custom_domain';
+ 
+@@ -20,7 +20,7 @@ public function __construct(
+     /**
+      * @return bool
+      */
+-    public function isCustomDomain(): bool
++    public function isCustomDomainEnabled(): bool
+     {
+         return $this->scopeConfig->isSetFlag(
+             self::XML_IS_CUSTOM_DOMAIN
+diff --git a/Model/Config/Source/Domain.php b/Model/Config/Source/Domain.php
+index d30b445..17f3c88 100644
+--- a/Model/Config/Source/Domain.php
++++ b/Model/Config/Source/Domain.php
+@@ -13,11 +13,11 @@ class Domain implements OptionSourceInterface
+     public function toOptionArray(): array
+     {
+         return [
+-            DomainInterface::NGROK_IO,
+-            DomainInterface::NGROK_APP,
+-            DomainInterface::NGROK_DEV,
+-            DomainInterface::NGROK_FREE_APP,
+-            DomainInterface::NGROK_FREE_DEV
++            DomainInterface::NGROK_IO => DomainInterface::NGROK_IO,
++            DomainInterface::NGROK_APP => DomainInterface::NGROK_APP,
++            DomainInterface::NGROK_DEV => DomainInterface::NGROK_DEV,
++            DomainInterface::NGROK_FREE_APP => DomainInterface::NGROK_FREE_APP,
++            DomainInterface::NGROK_FREE_DEV => DomainInterface::NGROK_FREE_DEV
+         ];
+     }
+ }
+\ No newline at end of file
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+index 1f9f31e..d042b4d 100644
+--- a/etc/adminhtml/system.xml
++++ b/etc/adminhtml/system.xml
+@@ -19,22 +19,22 @@
+                    sortOrder="10"
+                    showInDefault="1">
+                 <label>General</label>
+-                <field id="custom"
++                <field id="domain"
+                        translate="label"
+                        type="select"
+                        sortOrder="10"
+                        showInDefault="1">
++                    <label>Domain</label>
+                     <validate>required-entry</validate>
+-                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
++                    <source_model>Shkoliar\Ngrok\Model\Config\Source\Domain</source_model>
+                 </field>
+-                <field id="domain"
++                <field id="enable_custom_domain"
+                        translate="label"
+                        type="select"
+                        sortOrder="20"
+                        showInDefault="1">
+-                    <label>Domain</label>
+                     <validate>required-entry</validate>
+-                    <source_model>Shkoliar\Ngrok\Model\Config\Source\Domain</source_model>
++                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                 </field>
+                 <field id="custom_domain"
+                        translate="label"
+@@ -42,6 +42,7 @@
+                        sortOrder="30"
+                        showInDefault="1">
+                     <label>Custom Domain</label>
++                    <depends>ngrok/general/enable_custom_domain</depends>
+                 </field>
+             </group>
+         </section>
+diff --git a/etc/config.xml b/etc/config.xml
+index fe0fe1c..58b2b90 100644
+--- a/etc/config.xml
++++ b/etc/config.xml
+@@ -4,7 +4,7 @@
+     <default>
+         <ngrok>
+             <general>
+-                <custom>0</custom>
++                <enable_custom_domain>0</enable_custom_domain>
+                 <domain>.ngrok-free.app</domain>
+             </general>
+         </ngrok>
+
+From 7f89351039f0dc765d09bf6367e0ad183966233b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Mon, 29 May 2023 17:01:52 +0200
+Subject: [PATCH 10/12] Fixes depends flag
+
+---
+ etc/adminhtml/system.xml | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/etc/adminhtml/system.xml b/etc/adminhtml/system.xml
+index d042b4d..f047472 100644
+--- a/etc/adminhtml/system.xml
++++ b/etc/adminhtml/system.xml
+@@ -42,7 +42,9 @@
+                        sortOrder="30"
+                        showInDefault="1">
+                     <label>Custom Domain</label>
+-                    <depends>ngrok/general/enable_custom_domain</depends>
++                    <depends>
++                        <field id="ngrok/general/enable_custom_domain">1</field>
++                    </depends>
+                 </field>
+             </group>
+         </section>
+
+From 821cdd37257ca0815cdf78ec62bf26249c275fa3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Mon, 29 May 2023 17:02:07 +0200
+Subject: [PATCH 11/12] Use shortened if check
+
+---
+ Helper/Ngrok.php | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/Helper/Ngrok.php b/Helper/Ngrok.php
+index 6dce564..5d01ab6 100644
+--- a/Helper/Ngrok.php
++++ b/Helper/Ngrok.php
+@@ -51,11 +51,9 @@ public function getDomain()
+     {
+         $ngrokDomain = $this->getServer('HTTP_X_ORIGINAL_HOST') ?: $this->getServer('HTTP_HOST');
+ 
+-        if ($this->config->isCustomDomainEnabled()) {
+-            $configuredNgrokDomain = $this->config->getCustomDomain();
+-        } else {
+-            $configuredNgrokDomain = $this->config->getDomain();
+-        }
++        $configuredNgrokDomain = $this->config->isCustomDomainEnabled() ?
++            $this->config->getCustomDomain() :
++            $this->config->getDomain();
+ 
+         return stripos($ngrokDomain, $configuredNgrokDomain) !== false ? $ngrokDomain : false;
+     }
+
+From 0ba111fa53b15009da3f5b9de429ac072a129fc6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Daniel=20Jarz=C4=99bowski?= <daniel.jarzebowski@cepd.tech>
+Date: Mon, 29 May 2023 17:04:37 +0200
+Subject: [PATCH 12/12] Fixes array for returns to the configuration.
+
+---
+ Model/Config/Source/Domain.php | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/Model/Config/Source/Domain.php b/Model/Config/Source/Domain.php
+index 17f3c88..a020b2d 100644
+--- a/Model/Config/Source/Domain.php
++++ b/Model/Config/Source/Domain.php
+@@ -13,11 +13,21 @@ class Domain implements OptionSourceInterface
+     public function toOptionArray(): array
+     {
+         return [
+-            DomainInterface::NGROK_IO => DomainInterface::NGROK_IO,
+-            DomainInterface::NGROK_APP => DomainInterface::NGROK_APP,
+-            DomainInterface::NGROK_DEV => DomainInterface::NGROK_DEV,
+-            DomainInterface::NGROK_FREE_APP => DomainInterface::NGROK_FREE_APP,
+-            DomainInterface::NGROK_FREE_DEV => DomainInterface::NGROK_FREE_DEV
++            [
++                'label' => DomainInterface::NGROK_IO, 'value' => DomainInterface::NGROK_IO
++            ],
++            [
++                'label' => DomainInterface::NGROK_APP, 'value' => DomainInterface::NGROK_APP
++            ],
++            [
++                'label' => DomainInterface::NGROK_DEV, 'value' => DomainInterface::NGROK_DEV
++            ],
++            [
++                'label' => DomainInterface::NGROK_FREE_APP, 'value' => DomainInterface::NGROK_FREE_APP
++            ],
++            [
++                'label' => DomainInterface::NGROK_FREE_DEV, 'value' => DomainInterface::NGROK_FREE_DEV
++            ]
+         ];
+     }
+ }
+\ No newline at end of file
